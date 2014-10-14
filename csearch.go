@@ -1,29 +1,24 @@
 package main
 
 import (
-	"errors"
 	"fmt"
 	"html/template"
 	"log"
 	"net/http"
 	"os"
-	"path/filepath"
-	"regexp"
-	"regexp/syntax"
+	"sort"
 	"strconv"
 	"time"
 
 	"code.google.com/p/codesearch/index"
 	// csregexp "code.google.com/p/codesearch/regexp"
-
-	"./grep"
+	"github.com/evanj/csearch/grep"
+	"github.com/evanj/csearch/reindex"
 )
 
 const repositoryPath = "/Users/ej/gpath/src"
 const indexPath = "csearch_index"
 const staticPath = "static"
-
-const minQueryLength = 3
 
 type csearchServer struct {
 	ix *index.Index
@@ -31,10 +26,66 @@ type csearchServer struct {
 
 const formPage = `<html>
 <head><title>page</title>
+<script>
+var attachTypeahead = function() {
+  var typeaheadInput = document.getElementById('typeahead_in');
+  var typeaheadOutput = document.getElementById('typeahead_out')
+  var generation = 0;
+
+  var typeaheadError = function(e) {
+    console.log('typeahead error:', e);
+  }
+
+  var onInput = function(e) {
+    console.log('typeahead!', e, typeaheadInput.value);
+    if (typeaheadInput.value == '') {
+      typeaheadOutput.innerHTML = '';
+      return;
+    }
+
+    // attempt to guard against fast typing/slow queries
+    generation += 1;
+    var g = generation;
+    var typeaheadSuccess = function(result) {
+      if (g != generation) {
+        console.log('ignored typeahead:', g, generation);
+        return;
+      }
+
+      typeaheadOutput.innerHTML = result;
+    }
+    ajax('/type?q=' + typeaheadInput.value, typeaheadSuccess, typeaheadError);
+  }
+  typeaheadInput.addEventListener('input', onInput);
+}
+
+var ajax = function(path, onSuccess, onError) {
+  var request = new XMLHttpRequest();
+  request.open('GET', path, true);
+
+  request.onload = function() {
+    if (request.status == 200){
+      onSuccess(request.responseText);
+    } else {
+      onError(new Error('unexpected status: ' + request.status));
+    }
+  };
+
+  request.onerror = onError;
+  request.send();
+}
+
+window.addEventListener('load', attachTypeahead);
+</script>
 </head>
 <body>
 <form action="/search" method="GET">
-Query: <input type="text" name="q">
+Query: <input type="text" name="q"> file filter: <input type="text" name="f"> <input type="submit" value="Search">
+</form>
+
+<form>
+File name live: <input id="typeahead_in" type="text" name="q" width="50">
+<div id="typeahead_out"></div>
 </form>
 </body></html>`
 
@@ -50,44 +101,55 @@ func (server *csearchServer) handler(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(formPage))
 }
 
-func search(ix *index.Index, qString string) ([]*grep.Match, error) {
-	if len(qString) < minQueryLength {
-		return nil, errors.New("query string too short")
-	}
-	qSyntax, err := syntax.Parse(qString, syntax.Perl)
-	if err != nil {
-		return nil, err
-	}
-	re, err := regexp.Compile(qString)
-	if err != nil {
-		return nil, err
-	}
-	indexQuery := index.RegexpQuery(qSyntax)
+type typeaheadMatch struct {
+	score int
+	path  string
+}
 
+type typeaheadMatches []*typeaheadMatch
+
+func (a typeaheadMatches) Len() int           { return len(a) }
+func (a typeaheadMatches) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
+func (a typeaheadMatches) Less(i, j int) bool { return a[i].score > a[j].score }
+
+func (server *csearchServer) typeaheadHandler(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
-	postingList := ix.PostingQuery(indexQuery)
-	postingTime := time.Now()
-	log.Printf("%d posting list matches", len(postingList))
-
-	realMatches := 0
-	var results []*grep.Match
-	for _, fileId := range postingList {
-		name := ix.Name(fileId)
-		matches, err := grep.Grep(re, name)
-		if err != nil {
-			return nil, err
-		}
-		if len(matches) > 0 {
-			realMatches += 1
-		}
-		results = append(results, matches...)
+	err := r.ParseForm()
+	if err != nil {
+		panic(err)
 	}
-	grepTime := time.Now()
-	log.Printf("posting matches: %d; real matches: %d (false positives: %d)",
-		len(postingList), realMatches, len(postingList)-realMatches)
-	log.Printf("posting time: %f grep time: %f",
-		postingTime.Sub(start).Seconds(), grepTime.Sub(postingTime).Seconds())
-	return results, nil
+	q := r.Form.Get("q")
+	if q == "" {
+		// 200 OK: Empty body (no results)
+		return
+	}
+
+	// apply the search to all the files
+	matches := []*typeaheadMatch{}
+	for i := 0; i < server.ix.NumNames(); i++ {
+		path := server.ix.Name(uint32(i))
+		score := grep.FuzzyMatch(path, q)
+		if score >= 0 {
+			match := &typeaheadMatch{score, path}
+			matches = append(matches, match)
+		}
+	}
+	sort.Sort(typeaheadMatches(matches))
+
+	// TODO: Eliminate this N^2 algorithm
+	const maxResults = 100
+	lastResult := len(matches)
+	if lastResult > 100 {
+		lastResult = maxResults
+	}
+	output := ""
+	for _, m := range matches[:lastResult] {
+		output += "<div>" + template.HTMLEscapeString(m.path) + "</div>"
+	}
+	w.Write([]byte(output))
+	end := time.Now()
+	log.Printf("typeahead query len: %d; paths: %d; matches: %d; %f seconds",
+		len(q), server.ix.NumNames(), len(matches), end.Sub(start).Seconds())
 }
 
 func (server *csearchServer) searchHandler(w http.ResponseWriter, r *http.Request) {
@@ -95,7 +157,7 @@ func (server *csearchServer) searchHandler(w http.ResponseWriter, r *http.Reques
 	if err != nil {
 		panic(err)
 	}
-	results, err := search(server.ix, r.Form.Get("q"))
+	results, err := reindex.Search(server.ix, r.Form.Get("q"), r.Form.Get("f"))
 	if err != nil {
 		panic(err)
 	}
@@ -119,47 +181,16 @@ func logRequests(handler http.Handler) http.Handler {
 	})
 }
 
-func indexTree(tree string, indexPath string) (*index.Index, error) {
-	err := os.Remove(indexPath)
-	if err != nil && !os.IsNotExist(err) {
-		return nil, err
-	}
-
-	ix := index.Create(indexPath)
-	ix.AddPaths([]string{tree})
-
-	err = filepath.Walk(tree, func(path string, info os.FileInfo, err error) error {
-		if _, elem := filepath.Split(path); elem != "" {
-			// Skip various temporary or "hidden" files or directories.
-			if elem[0] == '.' || elem[0] == '#' || elem[0] == '~' || elem[len(elem)-1] == '~' {
-				if info.IsDir() {
-					return filepath.SkipDir
-				}
-				return nil
-			}
-		}
-		if err != nil {
-			log.Printf("%s: %s", path, err)
-			return nil
-		}
-		if info != nil && info.Mode()&os.ModeType == 0 {
-			ix.AddFile(path)
-		}
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	ix.Flush()
-
-	return index.Open(indexPath), nil
-}
-
 func main() {
-	fmt.Printf("Indexing %s ...\n", repositoryPath)
+	if len(os.Args) != 2 {
+		fmt.Fprintln(os.Stderr, "Usage: csearch (source path)")
+		os.Exit(1)
+	}
+	sourcePath := os.Args[1]
+
+	fmt.Printf("Indexing %s ...\n", sourcePath)
 	start := time.Now()
-	ix, err := indexTree(repositoryPath, indexPath)
+	ix, err := reindex.IndexTree(sourcePath, indexPath)
 	if err != nil {
 		panic(err)
 	}
@@ -175,6 +206,7 @@ func main() {
 	http.Handle(staticPrefix, staticHandler)
 	http.Handle("/", http.HandlerFunc(server.handler))
 	http.Handle("/search", http.HandlerFunc(server.searchHandler))
+	http.Handle("/type", http.HandlerFunc(server.typeaheadHandler))
 
 	fmt.Println("Listening on http://localhost:8080/")
 	err = http.ListenAndServe(":8080", logRequests(http.DefaultServeMux))
