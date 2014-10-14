@@ -3,30 +3,101 @@ package grep
 import (
 	"strings"
 	"testing"
+	"unicode"
 )
 
-func TestFuzzyMatch(t *testing.T) {
-	first := FuzzyMatch("type", "a/b/c/TypeAheadHandler.java")
-	secondA := FuzzyMatch("type", "a/b/c/OBJ_TYPE.txt")
-	secondB := FuzzyMatch("type", "a/b/c/PlaceType.java")
-	third := FuzzyMatch("type", "a/b/type/Foo.java")
-	fourth := FuzzyMatch("type", "a/b/ctyped/Foo.java")
+func TestIsWordStart(t *testing.T) {
+	strings := []string{
+		"SampleWord",
+		"sampleWord",
+		"sample-word",
+		"--sample---word---",
+		"--SAMPLE---WORD---",
+	}
 
-	if first <= secondA {
-		t.Error("wrong order:", first, secondA)
+	for _, s := range strings {
+		previous := wordStartInitialRune
+		for _, r := range s {
+			lr := unicode.ToLower(r)
+			if lr == 's' || lr == 'w' {
+				if !isWordStart(previous, r) {
+					t.Errorf("%s: expected %c -> %c to be a word", previous, r)
+				}
+			} else if isWordStart(previous, r) {
+				t.Errorf("%s: expected %c -> %c to not be a word", previous, r)
+			}
+			previous = r
+		}
 	}
-	if secondA != secondB {
-		t.Error("wrong order:", secondA, secondB)
+}
+
+func TestFuzzyMatch(t *testing.T) {
+	scoreOrder := []string{
+		"a/b/c/TypeAheadHandler.java",
+		"a/b/c/PlaceType.java",
+		"a/b/type/Foo.java",
+		"a/b/ctyped/Foo.java",
 	}
-	if secondB <= third {
-		t.Error("wrong order:", secondB, third)
+	assertOrder(t, scoreOrder, "type")
+}
+
+func assertOrder(t *testing.T, scoreOrder []string, query string) {
+	prevScore := 10000
+	prevPath := ""
+	for _, path := range scoreOrder {
+		score := FuzzyMatch(path, query)
+		// log.Printf("%s %d", path, score)
+		if score >= prevScore {
+			t.Errorf("%s (%d) should be less than %s (%d)", path, score, prevPath, prevScore)
+		}
+
+		prevScore = score
+		prevPath = path
 	}
-	if third <= fourth {
-		t.Error("wrong order:", third, fourth)
+	if prevScore < 0 {
+		t.Errorf("%s (%d) should match", prevPath, prevScore)
 	}
-	if fourth < 0 {
-		t.Error("last must match:", fourth)
+}
+
+func TestFuzzyFilename(t *testing.T) {
+	scoreOrder := []string{
+		"f/i/l/File.java",
+		"f/i/l/file.txt",
+		"a/b/c/examplefile.txt",
+		"a/f/i/le.txt",
 	}
+	assertOrder(t, scoreOrder, "File")
+}
+
+func TestAbbreviations(t *testing.T) {
+	scoreOrder2 := []string{
+		"science/src/thrift/com/twitter/ads/adserver/adserver_new_rpc.thrift",
+		"science/tests/resources/com/twitter/ads/dataservice/validation/rules/card/ValidateLeadGenCardRulesIT.testDefaultCard_response_logs.txt",
+	}
+	assertOrder(t, scoreOrder2, "anr")
+	scoreOrder := []string{
+		"/Users/ejones/workspace/science/src/thrift/com/twitter/ads/adserver/adserver_new_rpc.thrift",
+		"/Users/ejones/workspace/science/tests/resources/com/twitter/ads/dataservice/validation/rules/card/ValidateLeadGenCardRulesIT.testDefaultCard_response_logs.txt",
+	}
+	assertOrder(t, scoreOrder, "anr")
+}
+
+func TestWordMatch(t *testing.T) {
+	scoreOrder := []string{
+		// "foo/bar/viewer.thrift",
+		"foo/harViewer.js",
+		"foo/reviewer.html",
+		// "foo/view_alerts.html",
+		// "baz/har-viewer/something.js",
+		// "path/CreativeWriterWithExisting_response.txt",
+	}
+	assertOrder(t, scoreOrder, "viewer")
+
+	other := []string{
+		"path/apt",
+		"path/api_test",
+	}
+	assertOrder(t, other, "apt")
 }
 
 func TestContainsBytesFuzzy(t *testing.T) {
@@ -75,6 +146,13 @@ func TestContainsBytesFuzzyInsensitive(t *testing.T) {
 		if !containsBytesFuzzyInsensitive(s, query) {
 			t.Error(s + " must contain " + query + " (returned false)")
 		}
+	}
+
+	// Known false positive: this is a *byte* match, not a string match
+	nbsp := "\u00a0"            // UTF-8: nbsp (c2 a0)
+	poundSDot := "\u00a3\u2260" // UTF-8: pound (c2 a3) NOT EQUAL TO (e2 89 a0)
+	if !containsBytesFuzzyInsensitive(poundSDot, nbsp) {
+		t.Error("expected match (bytes match, even though runes do not)")
 	}
 }
 

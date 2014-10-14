@@ -1,6 +1,8 @@
 package grep
 
 import (
+	"path"
+	"strings"
 	"unicode"
 	"unicode/utf8"
 )
@@ -28,7 +30,7 @@ func asciiToLower(b byte) byte {
 func containsBytesFuzzyInsensitive(s string, query string) bool {
 	// this is ridiculously over-optimized
 	// We unconditionally set the magicLowerBit for an approximate case-insensitive comparison
-	// if the are equal, we actually execute the significantly slower asciiToLower()
+	// if they are equal, we execute asciiToLower(), which is signficantly slower
 	// this is about ~25% faster than always calling asciiToLower
 	const magicLowerBit = 0x20
 	qIndex := 0
@@ -63,53 +65,101 @@ func toRunes(s string) []rune {
 	return runes
 }
 
-func isWordEnd(previous rune, next rune) bool {
+// A word begins when the previous rune is a non-letter (_example), or if there is a lowercase
+// to uppercase transition (newWord). Uppercase does not count (Word) (HTTP)
+func isWordStart(previous rune, current rune) bool {
+	if !unicode.IsLetter(current) {
+		return false
+	}
 	if !unicode.IsLetter(previous) {
 		return true
 	}
-	if unicode.IsLower(previous) && !unicode.IsLower(next) {
+	if unicode.IsLower(previous) && !unicode.IsLower(current) {
 		return true
 	}
 	return false
 }
 
-// Returns a ranking of how well query matches path. Values less than zero do not match at all.
-// General order: Filename prefix match (case insensitive)
-func FuzzyMatch(query string, path string) int {
-	qRunes := toRunes(query)
-	pRunes := toRunes(path)
+// pass into isWordStart to detect a word start at the beginning of a string
+const wordStartInitialRune = '-'
 
-	lastPathIndex := -1
-	for i, c := range pRunes {
-		if c == '/' {
-			lastPathIndex = i
+// general order of file path scores
+const fileNamePrefixScore = 500
+const fileNameWordPrefixScore = 400
+const fileNameSubstringScore = 300
+const fileNameMatchScore = 100
+const caseMatchBonus = 10
+
+// Returns a ranking of how well query matches path. Values less than zero do not match at all.
+// General order of scores:
+// * Filename prefix match (with case match bonus)
+// * Filename substring match (with entire word, word prefix, case match bonuses)
+// * Path substring match (same bonuses)
+// * Filename fuzzy match (all chars in filename)
+// * path + filename match
+func FuzzyMatch(filepath string, query string) int {
+	// this filter is "incorrect":
+	// * false positive: matches BYTES, so it can incorrectly match UTF-8 byte parts. (see unit test)
+	// * false negative: doesn't lowercase non-ASCII
+	if !containsBytesFuzzyInsensitive(filepath, query) {
+		return -1
+	}
+
+	// file name prefix and substring match
+	filename := path.Base(filepath)
+	index := strings.Index(strings.ToLower(filename), strings.ToLower(query))
+	if index >= 0 {
+		caseScore := 0
+		if strings.HasPrefix(filename[index:], query) {
+			caseScore = caseMatchBonus
+		}
+		if index == 0 {
+			return fileNamePrefixScore + caseScore
+		}
+		prevRune, _ := utf8.DecodeLastRuneInString(filename[:index])
+		firstMatchRune, _ := utf8.DecodeRuneInString(filename[index:])
+		if prevRune == utf8.RuneError || firstMatchRune == utf8.RuneError {
+			panic("unexpected rune error: invalid UTF-8 filename?")
+		}
+		if isWordStart(prevRune, firstMatchRune) {
+			return fileNameWordPrefixScore + caseScore
+		}
+		return fileNameSubstringScore + caseScore
+	}
+
+	// file name fuzzy match
+	if containsBytesFuzzyInsensitive(filename, query) {
+		score := scoreFuzzyStrings(filename, query)
+		if score >= 0 {
+			return score + fileNameMatchScore
 		}
 	}
 
+	// path fuzzy match
+	return scoreFuzzyStrings(filepath, query)
+}
+
+// Returns the score for string matches, ignoring path-specific information
+func scoreFuzzyStrings(s string, query string) int {
+	qRunes := toRunes(query)
+
 	score := 0
 	qIndex := 0
-	for i, pRune := range pRunes {
+	previousRune := wordStartInitialRune
+	for _, sRune := range s {
 		qRuneLower := unicode.ToLower(qRunes[qIndex])
-		pRuneLower := unicode.ToLower(pRune)
-		if qRuneLower == pRuneLower {
+		sRuneLower := unicode.ToLower(sRune)
+		if qRuneLower == sRuneLower {
 			// if this rune is the beginning of a word it scores higher
-			if i == 0 || isWordEnd(pRunes[i-1], pRune) {
+			if isWordStart(previousRune, sRune) {
 				score += 1
-			}
-			if qIndex == 0 {
-				if i == lastPathIndex+1 {
-					// first match is the beginning of the filename: huge boost
-					score += 100
-				} else if i > lastPathIndex {
-					// first match is in the filename: bost
-					score += 50
-				}
 			}
 			qIndex += 1
 			if qIndex == len(qRunes) {
 				break
 			}
 		}
+		previousRune = sRune
 	}
 	if qIndex != len(qRunes) {
 		return -1
