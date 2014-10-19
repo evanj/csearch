@@ -15,16 +15,20 @@ import (
 
 const minQueryLength = 3
 
-func IndexTree(tree string, indexPath string) (*index.Index, error) {
+func Create(indexPath string) (*index.IndexWriter, error) {
 	err := os.Remove(indexPath)
 	if err != nil && !os.IsNotExist(err) {
 		return nil, err
 	}
 
 	ix := index.Create(indexPath)
+	return ix, nil
+}
+
+func IndexTree(ix *index.IndexWriter, tree string) error {
 	ix.AddPaths([]string{tree})
 
-	err = filepath.Walk(tree, func(path string, info os.FileInfo, err error) error {
+	err := filepath.Walk(tree, func(path string, info os.FileInfo, err error) error {
 		if _, elem := filepath.Split(path); elem != "" {
 			// Skip various temporary or "hidden" files or directories.
 			if elem[0] == '.' || elem[0] == '#' || elem[0] == '~' || elem[len(elem)-1] == '~' {
@@ -43,13 +47,13 @@ func IndexTree(tree string, indexPath string) (*index.Index, error) {
 		}
 		return nil
 	})
-	if err != nil {
-		return nil, err
-	}
+	return err
+}
 
-	ix.Flush()
-
-	return index.Open(indexPath), nil
+// TODO: get path from writer? Don't include this at all? (it does make imports easier)
+func FlushAndReopen(writer *index.IndexWriter, path string) *index.Index {
+	writer.Flush()
+	return index.Open(path)
 }
 
 func Search(ix *index.Index, qString string, fileRegexp string) ([]*grep.Match, error) {

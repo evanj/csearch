@@ -14,6 +14,11 @@ func TestSearch(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer os.RemoveAll(tempDir)
+	tempDir2, err := ioutil.TempDir("", "search_test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tempDir2)
 
 	f1Path := filepath.Join(tempDir, "f1")
 	err = ioutil.WriteFile(f1Path, []byte("hello world f1\nfoo bar\n"), 0700)
@@ -25,11 +30,28 @@ func TestSearch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	index, err := IndexTree(tempDir, filepath.Join(tempDir, ".index"))
+	f3Path := filepath.Join(tempDir2, "f3")
+	err = ioutil.WriteFile(f3Path, []byte("hello world f3\nfoo bar\n"), 0700)
 	if err != nil {
 		t.Fatal(err)
 	}
+
+	indexPath := filepath.Join(tempDir, ".index")
+	writer, err := Create(indexPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = IndexTree(writer, tempDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = IndexTree(writer, tempDir2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer.Flush()
+
+	index := FlushAndReopen(writer, indexPath)
 
 	results, err := Search(index, " f1", "")
 	if err != nil {
@@ -52,7 +74,7 @@ func TestSearch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(results) != 2 {
+	if len(results) != 3 {
 		t.Error(results)
 	}
 	results, err = Search(index, "foo", "f1$")

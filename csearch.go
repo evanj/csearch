@@ -8,6 +8,7 @@ import (
 	"os"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"code.google.com/p/codesearch/index"
@@ -182,18 +183,26 @@ func logRequests(handler http.Handler) http.Handler {
 }
 
 func main() {
-	if len(os.Args) != 2 {
-		fmt.Fprintln(os.Stderr, "Usage: csearch (source path)")
+	if len(os.Args) < 2 {
+		fmt.Fprintln(os.Stderr, "Usage: csearch (source tree) [source tree*]")
 		os.Exit(1)
 	}
-	sourcePath := os.Args[1]
+	sourcePaths := os.Args[1:]
 
-	fmt.Printf("Indexing %s ...\n", sourcePath)
+	fmt.Printf("Indexing %s ...\n", strings.Join(sourcePaths, ", "))
 	start := time.Now()
-	ix, err := reindex.IndexTree(sourcePath, indexPath)
+	writer, err := reindex.Create(indexPath)
 	if err != nil {
 		panic(err)
 	}
+	for _, path := range sourcePaths {
+		err = reindex.IndexTree(writer, path)
+		if err != nil {
+			panic(err)
+		}
+	}
+	ix := reindex.FlushAndReopen(writer, indexPath)
+	writer = nil
 	end := time.Now()
 	fmt.Printf("Done (%f seconds)\n", end.Sub(start).Seconds())
 
