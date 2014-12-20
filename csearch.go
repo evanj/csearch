@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"html/template"
 	"log"
@@ -183,28 +184,37 @@ func logRequests(handler http.Handler) http.Handler {
 }
 
 func main() {
-	if len(os.Args) < 2 {
+	skipIndexing := flag.Bool("skipIndexing", false, "do not index the source trees (uses existing index)")
+	port := flag.Int("port", 8080, "HTTP listening port")
+	flag.Parse()
+	if flag.NArg() == 0 {
 		fmt.Fprintln(os.Stderr, "Usage: csearch (source tree) [source tree*]")
+		flag.Usage()
 		os.Exit(1)
 	}
-	sourcePaths := os.Args[1:]
+	sourcePaths := flag.Args()
 
-	fmt.Printf("Indexing %s ...\n", strings.Join(sourcePaths, ", "))
-	start := time.Now()
-	writer, err := reindex.Create(indexPath)
-	if err != nil {
-		panic(err)
-	}
-	for _, path := range sourcePaths {
-		err = reindex.IndexTree(writer, path)
+	var ix *index.Index
+	if !*skipIndexing {
+		fmt.Printf("Indexing %s ...\n", strings.Join(sourcePaths, ", "))
+		start := time.Now()
+		writer, err := reindex.Create(indexPath)
 		if err != nil {
 			panic(err)
 		}
+		for _, path := range sourcePaths {
+			err = reindex.IndexTree(writer, path)
+			if err != nil {
+				panic(err)
+			}
+		}
+		ix = reindex.FlushAndReopen(writer, indexPath)
+		writer = nil
+		end := time.Now()
+		fmt.Printf("Done (%f seconds)\n", end.Sub(start).Seconds())
+	} else {
+		ix = index.Open(indexPath)
 	}
-	ix := reindex.FlushAndReopen(writer, indexPath)
-	writer = nil
-	end := time.Now()
-	fmt.Printf("Done (%f seconds)\n", end.Sub(start).Seconds())
 
 	server := csearchServer{ix}
 
@@ -217,8 +227,9 @@ func main() {
 	http.Handle("/search", http.HandlerFunc(server.searchHandler))
 	http.Handle("/type", http.HandlerFunc(server.typeaheadHandler))
 
-	fmt.Println("Listening on http://localhost:8080/")
-	err = http.ListenAndServe(":8080", logRequests(http.DefaultServeMux))
+	portString := ":" + strconv.Itoa(*port)
+	fmt.Printf("Listening on http://localhost%s/\n", portString)
+	err := http.ListenAndServe(portString, logRequests(http.DefaultServeMux))
 	if err != nil {
 		panic(err)
 	}
