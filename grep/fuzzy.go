@@ -109,33 +109,34 @@ func FuzzyMatch(filepath string, query string) int {
 	}
 
 	// file name prefix and substring match
+	// do a fast test before slow scoring (minor performance win)
 	filename := path.Base(filepath)
-	index := strings.Index(strings.ToLower(filename), strings.ToLower(query))
-	if index >= 0 {
-		lengthPenalty := len(filename) - len(query)
-		if lengthPenalty > maxLengthPenalty {
-			lengthPenalty = maxLengthPenalty
-		}
-		caseScore := 0
-		if strings.HasPrefix(filename[index:], query) {
-			caseScore = caseMatchBonus
-		}
-		if index == 0 {
-			return fileNamePrefixScore + caseScore - lengthPenalty
-		}
-		prevRune, _ := utf8.DecodeLastRuneInString(filename[:index])
-		firstMatchRune, _ := utf8.DecodeRuneInString(filename[index:])
-		if prevRune == utf8.RuneError || firstMatchRune == utf8.RuneError {
-			panic("unexpected rune error: invalid UTF-8 filename?")
-		}
-		if isWordStart(prevRune, firstMatchRune) {
-			return fileNameWordPrefixScore + caseScore - lengthPenalty
-		}
-		return fileNameSubstringScore + caseScore - lengthPenalty
-	}
-
-	// file name fuzzy match
 	if containsBytesFuzzyInsensitive(filename, query) {
+		index := strings.Index(strings.ToLower(filename), strings.ToLower(query))
+		if index >= 0 {
+			lengthPenalty := len(filename) - len(query)
+			if lengthPenalty > maxLengthPenalty {
+				lengthPenalty = maxLengthPenalty
+			}
+			caseScore := 0
+			if strings.HasPrefix(filename[index:], query) {
+				caseScore = caseMatchBonus
+			}
+			if index == 0 {
+				return fileNamePrefixScore + caseScore - lengthPenalty
+			}
+			prevRune, _ := utf8.DecodeLastRuneInString(filename[:index])
+			firstMatchRune, _ := utf8.DecodeRuneInString(filename[index:])
+			if prevRune == utf8.RuneError || firstMatchRune == utf8.RuneError {
+				panic("unexpected rune error: invalid UTF-8 filename?")
+			}
+			if isWordStart(prevRune, firstMatchRune) {
+				return fileNameWordPrefixScore + caseScore - lengthPenalty
+			}
+			return fileNameSubstringScore + caseScore - lengthPenalty
+		}
+
+		// file name fuzzy match
 		score := scoreFuzzyStrings(filename, query)
 		if score >= 0 {
 			return score + fileNameMatchScore
