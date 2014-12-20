@@ -100,6 +100,16 @@ func TestWordMatch(t *testing.T) {
 	assertOrder(t, other, "apt")
 }
 
+func TestShorterFilenamesScoreHigher(t *testing.T) {
+	scoreOrder := []string{
+		"zzzreally/longbutbetter/git",
+		"zzzlonger/git.a",
+		"zzlong/path/git.py",
+		"ashort/git-foo.py",
+	}
+	assertOrder(t, scoreOrder, "git")
+}
+
 func TestContainsBytesFuzzy(t *testing.T) {
 	const query = "abcde"
 

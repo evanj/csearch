@@ -90,6 +90,8 @@ const fileNameSubstringScore = 300
 const fileNameMatchScore = 100
 const caseMatchBonus = 10
 
+const maxLengthPenalty = 80
+
 // Returns a ranking of how well query matches path. Values less than zero do not match at all.
 // General order of scores:
 // * Filename prefix match (with case match bonus)
@@ -109,12 +111,16 @@ func FuzzyMatch(filepath string, query string) int {
 	filename := path.Base(filepath)
 	index := strings.Index(strings.ToLower(filename), strings.ToLower(query))
 	if index >= 0 {
+		lengthPenalty := len(filename) - len(query)
+		if lengthPenalty > maxLengthPenalty {
+			lengthPenalty = maxLengthPenalty
+		}
 		caseScore := 0
 		if strings.HasPrefix(filename[index:], query) {
 			caseScore = caseMatchBonus
 		}
 		if index == 0 {
-			return fileNamePrefixScore + caseScore
+			return fileNamePrefixScore + caseScore - lengthPenalty
 		}
 		prevRune, _ := utf8.DecodeLastRuneInString(filename[:index])
 		firstMatchRune, _ := utf8.DecodeRuneInString(filename[index:])
@@ -122,9 +128,9 @@ func FuzzyMatch(filepath string, query string) int {
 			panic("unexpected rune error: invalid UTF-8 filename?")
 		}
 		if isWordStart(prevRune, firstMatchRune) {
-			return fileNameWordPrefixScore + caseScore
+			return fileNameWordPrefixScore + caseScore - lengthPenalty
 		}
-		return fileNameSubstringScore + caseScore
+		return fileNameSubstringScore + caseScore - lengthPenalty
 	}
 
 	// file name fuzzy match
