@@ -1,6 +1,7 @@
 package grep
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 	"unicode"
@@ -108,6 +109,46 @@ func TestShorterFilenamesScoreHigher(t *testing.T) {
 		"ashort/git-foo.py",
 	}
 	assertOrder(t, scoreOrder, "git")
+}
+
+func matchValues(matcher *FuzzyMatcher) {
+	values := []string{
+		"he-match-llo",
+		"helloworld",
+		"goodbye",
+		"hello",
+	}
+	for _, v := range values {
+		matcher.Match(v)
+	}
+}
+
+func TestFuzzyMatcherUnlimited(t *testing.T) {
+	matcher := FuzzyMatcher{Query: "hello"}
+	matchValues(&matcher)
+
+	output := matcher.Results()
+	expected := []string{
+		"hello",
+		"helloworld",
+		"he-match-llo",
+	}
+	if !reflect.DeepEqual(expected, output) {
+		t.Error("unexpected results", expected, output)
+	}
+}
+
+func TestFuzzyMatcherLimited(t *testing.T) {
+	matcher := FuzzyMatcher{Query: "hello", Limit: 2}
+	matchValues(&matcher)
+	output := matcher.Results()
+	expected := []string{
+		"hello",
+		"helloworld",
+	}
+	if !reflect.DeepEqual(expected, output) {
+		t.Error("unexpected results", expected, output)
+	}
 }
 
 func TestContainsBytesFuzzy(t *testing.T) {

@@ -7,7 +7,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -21,6 +20,8 @@ import (
 const repositoryPath = "/Users/ej/gpath/src"
 const indexPath = "csearch_index"
 const staticPath = "static"
+
+const maxFileMatches = 200
 
 type csearchServer struct {
 	ix *index.Index
@@ -103,17 +104,6 @@ func (server *csearchServer) handler(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(formPage))
 }
 
-type typeaheadMatch struct {
-	score int
-	path  string
-}
-
-type typeaheadMatches []*typeaheadMatch
-
-func (a typeaheadMatches) Len() int           { return len(a) }
-func (a typeaheadMatches) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
-func (a typeaheadMatches) Less(i, j int) bool { return a[i].score > a[j].score }
-
 func (server *csearchServer) typeaheadHandler(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 	err := r.ParseForm()
@@ -127,31 +117,20 @@ func (server *csearchServer) typeaheadHandler(w http.ResponseWriter, r *http.Req
 	}
 
 	// apply the search to all the files
-	matches := []*typeaheadMatch{}
+	matcher := grep.FuzzyMatcher{Query: q, Limit: maxFileMatches}
 	for i := 0; i < server.ix.NumNames(); i++ {
 		path := server.ix.Name(uint32(i))
-		score := grep.FuzzyMatch(path, q)
-		if score >= 0 {
-			match := &typeaheadMatch{score, path}
-			matches = append(matches, match)
-		}
+		matcher.Match(path)
 	}
-	sort.Sort(typeaheadMatches(matches))
 
-	// TODO: Eliminate this N^2 algorithm
-	const maxResults = 100
-	lastResult := len(matches)
-	if lastResult > 100 {
-		lastResult = maxResults
+	for _, path := range matcher.Results() {
+		w.Write([]byte("<div>"))
+		template.HTMLEscape(w, []byte(path))
+		w.Write([]byte("</div>"))
 	}
-	output := ""
-	for _, m := range matches[:lastResult] {
-		output += "<div>" + template.HTMLEscapeString(m.path) + "</div>"
-	}
-	w.Write([]byte(output))
 	end := time.Now()
 	log.Printf("typeahead query len: %d; paths: %d; matches: %d; %f seconds",
-		len(q), server.ix.NumNames(), len(matches), end.Sub(start).Seconds())
+		len(q), server.ix.NumNames(), matcher.TotalMatches(), end.Sub(start).Seconds())
 }
 
 func (server *csearchServer) searchHandler(w http.ResponseWriter, r *http.Request) {

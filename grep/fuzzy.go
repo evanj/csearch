@@ -2,6 +2,7 @@ package grep
 
 import (
 	"path"
+	"sort"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -171,4 +172,65 @@ func scoreFuzzyStrings(s string, query string) int {
 		return -1
 	}
 	return score
+}
+
+type fuzzyMatch struct {
+	score int
+	value string
+}
+
+type fuzzyMatches []*fuzzyMatch
+
+func (a fuzzyMatches) Len() int           { return len(a) }
+func (a fuzzyMatches) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
+func (a fuzzyMatches) Less(i, j int) bool { return a[i].score > a[j].score }
+
+type FuzzyMatcher struct {
+	Query        string
+	Limit        int
+	results      []*fuzzyMatch
+	totalMatches int
+}
+
+func assert(v bool) {
+	if !v {
+		panic("assertion failed")
+	}
+}
+
+func (matcher *FuzzyMatcher) Match(value string) {
+	score := FuzzyMatch(value, matcher.Query)
+	if score < 0 {
+		// no match
+		return
+	}
+
+	matcher.totalMatches += 1
+	if matcher.Limit <= 0 || len(matcher.results) < matcher.Limit {
+		match := &fuzzyMatch{score, value}
+		matcher.results = append(matcher.results, match)
+	} else {
+		assert(matcher.Limit > 0 && len(matcher.results) == matcher.Limit)
+		// TODO: Make this faster? This is a naive n**2 algorithm
+		for _, r := range matcher.results {
+			if r.score < score {
+				r.score = score
+				r.value = value
+				break
+			}
+		}
+	}
+}
+
+func (matcher *FuzzyMatcher) Results() []string {
+	sort.Sort(fuzzyMatches(matcher.results))
+	out := make([]string, len(matcher.results))
+	for i, match := range matcher.results {
+		out[i] = match.value
+	}
+	return out
+}
+
+func (matcher *FuzzyMatcher) TotalMatches() int {
+	return matcher.totalMatches
 }
