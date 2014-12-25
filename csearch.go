@@ -24,7 +24,8 @@ const staticPath = "static"
 const maxFileMatches = 200
 
 type csearchServer struct {
-	ix *index.Index
+	ix          *index.Index
+	fileMatcher *grep.IndexedMatcher
 }
 
 const formPage = `<html>
@@ -116,21 +117,16 @@ func (server *csearchServer) typeaheadHandler(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	// apply the search to all the files
-	matcher := grep.FuzzyMatcher{Query: q, Limit: maxFileMatches}
-	for i := 0; i < server.ix.NumNames(); i++ {
-		path := server.ix.Name(uint32(i))
-		matcher.Match(path)
-	}
-
-	for _, path := range matcher.Results() {
+	// search for matching files!
+	results := server.fileMatcher.Match(q, maxFileMatches)
+	for _, path := range results {
 		w.Write([]byte("<div>"))
 		template.HTMLEscape(w, []byte(path))
 		w.Write([]byte("</div>"))
 	}
 	end := time.Now()
-	log.Printf("typeahead query len: %d; paths: %d; matches: %d; %f seconds",
-		len(q), server.ix.NumNames(), matcher.TotalMatches(), end.Sub(start).Seconds())
+	log.Printf("typeahead query len: %d; paths: %d; limited matches: %d; %f seconds",
+		len(q), server.ix.NumNames(), len(results), end.Sub(start).Seconds())
 }
 
 func (server *csearchServer) searchHandler(w http.ResponseWriter, r *http.Request) {
@@ -195,7 +191,12 @@ func main() {
 		ix = index.Open(indexPath)
 	}
 
-	server := csearchServer{ix}
+	indexedMatcher := grep.IndexedMatcher{}
+	for i := 0; i < ix.NumNames(); i++ {
+		path := ix.Name(uint32(i))
+		indexedMatcher.Add(path)
+	}
+	server := csearchServer{ix, &indexedMatcher}
 
 	http.HandleFunc("/favicon.ico", favicon)
 	const staticPrefix = "/static/"

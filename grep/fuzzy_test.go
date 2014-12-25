@@ -46,7 +46,7 @@ func assertOrder(t *testing.T, scoreOrder []string, query string) {
 	prevScore := 10000
 	prevPath := ""
 	for _, path := range scoreOrder {
-		score := FuzzyMatch(path, query)
+		score := FuzzyMatchPath(path, query)
 		// log.Printf("%s %d", path, score)
 		if score >= prevScore {
 			t.Errorf("%s (%d) should be less than %s (%d)", path, score, prevPath, prevScore)

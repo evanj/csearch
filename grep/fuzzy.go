@@ -100,7 +100,7 @@ const maxLengthPenalty = 80
 // * Path substring match (same bonuses)
 // * Filename fuzzy match (all chars in filename)
 // * path + filename match
-func FuzzyMatch(filepath string, query string) int {
+func fuzzyMatchPathAndFile(filepath string, filename string, query string) int {
 	// this filter is "incorrect":
 	// * false positive: matches BYTES, so it can incorrectly match UTF-8 byte parts. (see unit test)
 	// * false negative: doesn't lowercase non-ASCII
@@ -108,43 +108,57 @@ func FuzzyMatch(filepath string, query string) int {
 		return -1
 	}
 
-	// file name prefix and substring match
-	// do a fast test before slow scoring (minor performance win)
-	filename := path.Base(filepath)
-	if containsBytesFuzzyInsensitive(filename, query) {
-		index := strings.Index(strings.ToLower(filename), strings.ToLower(query))
-		if index >= 0 {
-			lengthPenalty := len(filename) - len(query)
-			if lengthPenalty > maxLengthPenalty {
-				lengthPenalty = maxLengthPenalty
-			}
-			caseScore := 0
-			if strings.HasPrefix(filename[index:], query) {
-				caseScore = caseMatchBonus
-			}
-			if index == 0 {
-				return fileNamePrefixScore + caseScore - lengthPenalty
-			}
-			prevRune, _ := utf8.DecodeLastRuneInString(filename[:index])
-			firstMatchRune, _ := utf8.DecodeRuneInString(filename[index:])
-			if prevRune == utf8.RuneError || firstMatchRune == utf8.RuneError {
-				panic("unexpected rune error: invalid UTF-8 filename?")
-			}
-			if isWordStart(prevRune, firstMatchRune) {
-				return fileNameWordPrefixScore + caseScore - lengthPenalty
-			}
-			return fileNameSubstringScore + caseScore - lengthPenalty
-		}
-
-		// file name fuzzy match
-		score := scoreFuzzyStrings(filename, query)
-		if score >= 0 {
-			return score + fileNameMatchScore
-		}
+	score := fuzzyMatchFile(filename, query)
+	if score >= 0 {
+		return score
 	}
 
 	// path fuzzy match
 	return scoreFuzzyStrings(filepath, query)
+}
+
+func fuzzyMatchFile(filename string, query string) int {
+	// file name prefix and substring match
+	// do a fast test before slow scoring (minor performance win)
+	if !containsBytesFuzzyInsensitive(filename, query) {
+		return -1
+	}
+
+	index := strings.Index(strings.ToLower(filename), strings.ToLower(query))
+	if index >= 0 {
+		lengthPenalty := len(filename) - len(query)
+		if lengthPenalty > maxLengthPenalty {
+			lengthPenalty = maxLengthPenalty
+		}
+		caseScore := 0
+		if strings.HasPrefix(filename[index:], query) {
+			caseScore = caseMatchBonus
+		}
+		if index == 0 {
+			return fileNamePrefixScore + caseScore - lengthPenalty
+		}
+		prevRune, _ := utf8.DecodeLastRuneInString(filename[:index])
+		firstMatchRune, _ := utf8.DecodeRuneInString(filename[index:])
+		if prevRune == utf8.RuneError || firstMatchRune == utf8.RuneError {
+			panic("unexpected rune error: invalid UTF-8 filename?")
+		}
+		if isWordStart(prevRune, firstMatchRune) {
+			return fileNameWordPrefixScore + caseScore - lengthPenalty
+		}
+		return fileNameSubstringScore + caseScore - lengthPenalty
+	}
+
+	// file name fuzzy match
+	score := scoreFuzzyStrings(filename, query)
+	if score >= 0 {
+		return score + fileNameMatchScore
+	}
+	return -1
+}
+
+func FuzzyMatchPath(filepath string, query string) int {
+	filename := path.Base(filepath)
+	return fuzzyMatchPathAndFile(filepath, filename, query)
 }
 
 // Returns the score for string matches, ignoring path-specific information
@@ -199,16 +213,11 @@ func assert(v bool) {
 	}
 }
 
-func (matcher *FuzzyMatcher) Match(value string) {
-	score := FuzzyMatch(value, matcher.Query)
-	if score < 0 {
-		// no match
-		return
-	}
-
+func (matcher *FuzzyMatcher) addResult(filepath string, score int) {
+	assert(score >= 0)
 	matcher.totalMatches += 1
 	if matcher.Limit <= 0 || len(matcher.results) < matcher.Limit {
-		match := &fuzzyMatch{score, value}
+		match := &fuzzyMatch{score, filepath}
 		matcher.results = append(matcher.results, match)
 	} else {
 		assert(matcher.Limit > 0 && len(matcher.results) == matcher.Limit)
@@ -216,11 +225,32 @@ func (matcher *FuzzyMatcher) Match(value string) {
 		for _, r := range matcher.results {
 			if r.score < score {
 				r.score = score
-				r.value = value
+				r.value = filepath
 				break
 			}
 		}
 	}
+}
+
+func (matcher *FuzzyMatcher) matchFile(filepath string, filename string) bool {
+	score := fuzzyMatchFile(filename, matcher.Query)
+	if score >= 0 {
+		matcher.addResult(filepath, score)
+		return true
+	}
+	return false
+}
+
+func (matcher *FuzzyMatcher) matchPathAndFile(filepath string, filename string) {
+	score := fuzzyMatchPathAndFile(filepath, filename, matcher.Query)
+	if score >= 0 {
+		matcher.addResult(filepath, score)
+	}
+}
+
+func (matcher *FuzzyMatcher) Match(filepath string) {
+	filename := path.Base(filepath)
+	matcher.matchPathAndFile(filepath, filename)
 }
 
 func (matcher *FuzzyMatcher) Results() []string {
@@ -234,4 +264,51 @@ func (matcher *FuzzyMatcher) Results() []string {
 
 func (matcher *FuzzyMatcher) TotalMatches() int {
 	return matcher.totalMatches
+}
+
+type indexedPath struct {
+	filepath string
+	filename string
+}
+
+type IndexedMatcher struct {
+	// TODO: Use two separate arrays for slightly better cache locality?
+	// TODO: ~35% of file paths are lowercase only (slightly more file names); could
+	// avoid calling .ToLower for paths that are known lowercase?
+	paths []*indexedPath
+}
+
+func (matcher *IndexedMatcher) Add(filepath string) {
+	filename := path.Base(filepath)
+	indexed := indexedPath{filepath, filename}
+	matcher.paths = append(matcher.paths, &indexed)
+}
+
+func (matcher *IndexedMatcher) Match(query string, limit int) []string {
+	// match file names first, then add results with patch matches
+	fuzzy := FuzzyMatcher{Query: query, Limit: limit}
+	matched := map[int]struct{}{}
+	for i, indexed := range matcher.paths {
+		if fuzzy.matchFile(indexed.filepath, indexed.filename) {
+			matched[i] = struct{}{}
+		}
+	}
+	if fuzzy.Limit > 0 && len(fuzzy.results) == fuzzy.Limit {
+		// found a full set of filename matches: we are done
+		return fuzzy.Results()
+	}
+
+	for i, indexed := range matcher.paths {
+		if _, ok := matched[i]; ok {
+			// already matched
+			continue
+		}
+		fuzzy.matchPathAndFile(indexed.filepath, indexed.filename)
+		if fuzzy.Limit > 0 && len(fuzzy.results) == fuzzy.Limit {
+			// don't care about finding the "best" path matches: this is probably enough
+			break
+		}
+	}
+
+	return fuzzy.Results()
 }

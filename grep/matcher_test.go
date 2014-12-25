@@ -29,6 +29,22 @@ func runBenchmark(b *testing.B, query string, limit int) {
 	}
 }
 
+func indexedBenchmark(b *testing.B, query string, limit int) int {
+	lines := loadData()
+	indexed := IndexedMatcher{}
+	for _, l := range lines {
+		indexed.Add(l)
+	}
+	b.ResetTimer()
+
+	totalMatches := 0
+	for i := 0; i < b.N; i++ {
+		matches := indexed.Match(query, limit)
+		totalMatches += len(matches)
+	}
+	return totalMatches
+}
+
 func BenchmarkFuzzyMatcherUnlimitedLong(b *testing.B) {
 	runBenchmark(b, "decoder", 0)
 }
@@ -43,4 +59,20 @@ func BenchmarkFuzzyMatcherUnlimitedShort(b *testing.B) {
 
 func BenchmarkFuzzyMatcherLimitedShort(b *testing.B) {
 	runBenchmark(b, "a", 50)
+}
+
+func BenchmarkIndexedMatcherUnlimitedLong(b *testing.B) {
+	indexedBenchmark(b, "decoder", 0)
+}
+
+func BenchmarkIndexedMatcherLimitedLong(b *testing.B) {
+	indexedBenchmark(b, "decoder", 50)
+}
+
+func BenchmarkIndexedMatcherUnlimitedShort(b *testing.B) {
+	indexedBenchmark(b, "a", 0)
+}
+
+func BenchmarkIndexedMatcherLimitedShort(b *testing.B) {
+	indexedBenchmark(b, "a", 50)
 }
