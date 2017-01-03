@@ -206,8 +206,8 @@ func main() {
 	http.Handle("/search", http.HandlerFunc(server.searchHandler))
 	http.Handle("/type", http.HandlerFunc(server.typeaheadHandler))
 
-	portString := ":" + strconv.Itoa(*port)
-	fmt.Printf("Listening on http://localhost%s/\n", portString)
+	portString := "localhost:" + strconv.Itoa(*port)
+	fmt.Printf("Listening on http://%s/\n", portString)
 	err := http.ListenAndServe(portString, logRequests(http.DefaultServeMux))
 	if err != nil {
 		panic(err)
