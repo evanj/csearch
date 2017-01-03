@@ -92,6 +92,10 @@ type Index struct {
 	numPost   int
 }
 
+func (i *Index) NumNames() int {
+	return i.numName
+}
+
 const postEntrySize = 3 + 4 + 4
 
 func Open(file string) *Index {
