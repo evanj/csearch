@@ -30,51 +30,51 @@ const formPage = `<html>
 <head><title>page</title>
 <script>
 var attachTypeahead = function() {
-  var typeaheadInput = document.getElementById('typeahead_in');
-  var typeaheadOutput = document.getElementById('typeahead_out')
-  var generation = 0;
+	var typeaheadInput = document.getElementById('typeahead_in');
+	var typeaheadOutput = document.getElementById('typeahead_out')
+	var generation = 0;
 
-  var typeaheadError = function(e) {
-    console.log('typeahead error:', e);
-  }
+	var typeaheadError = function(e) {
+		console.log('typeahead error:', e);
+	}
 
-  var onInput = function(e) {
-    console.log('typeahead!', e, typeaheadInput.value);
-    if (typeaheadInput.value == '') {
-      typeaheadOutput.innerHTML = '';
-      return;
-    }
+	var onInput = function(e) {
+		console.log('typeahead!', e, typeaheadInput.value);
+		if (typeaheadInput.value == '') {
+			typeaheadOutput.innerHTML = '';
+			return;
+		}
 
-    // attempt to guard against fast typing/slow queries
-    generation += 1;
-    var g = generation;
-    var typeaheadSuccess = function(result) {
-      if (g != generation) {
-        console.log('ignored typeahead:', g, generation);
-        return;
-      }
+		// attempt to guard against fast typing/slow queries
+		generation += 1;
+		var g = generation;
+		var typeaheadSuccess = function(result) {
+			if (g != generation) {
+				console.log('ignored typeahead:', g, generation);
+				return;
+			}
 
-      typeaheadOutput.innerHTML = result;
-    }
-    ajax('/type?q=' + typeaheadInput.value, typeaheadSuccess, typeaheadError);
-  }
-  typeaheadInput.addEventListener('input', onInput);
+			typeaheadOutput.innerHTML = result;
+		}
+		ajax('/type?q=' + typeaheadInput.value, typeaheadSuccess, typeaheadError);
+	}
+	typeaheadInput.addEventListener('input', onInput);
 }
 
 var ajax = function(path, onSuccess, onError) {
-  var request = new XMLHttpRequest();
-  request.open('GET', path, true);
+	var request = new XMLHttpRequest();
+	request.open('GET', path, true);
 
-  request.onload = function() {
-    if (request.status == 200){
-      onSuccess(request.responseText);
-    } else {
-      onError(new Error('unexpected status: ' + request.status));
-    }
-  };
+	request.onload = function() {
+		if (request.status == 200){
+			onSuccess(request.responseText);
+		} else {
+			onError(new Error('unexpected status: ' + request.status));
+		}
+	};
 
-  request.onerror = onError;
-  request.send();
+	request.onerror = onError;
+	request.send();
 }
 
 window.addEventListener('load', attachTypeahead);
