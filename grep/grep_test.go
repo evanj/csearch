@@ -8,7 +8,7 @@ import (
 	"regexp"
 	"testing"
 
-	cregexp "code.google.com/p/codesearch/regexp"
+	cregexp "github.com/evanj/csearch/codesearch/regexp"
 )
 
 type grepper interface {

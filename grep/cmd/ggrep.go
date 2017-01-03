@@ -5,7 +5,7 @@ import (
 	"os"
 	"regexp"
 
-	"../../grep"
+	"github.com/evanj/csearch/grep"
 )
 
 func main() {

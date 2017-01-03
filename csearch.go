@@ -11,8 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"code.google.com/p/codesearch/index"
-	// csregexp "code.google.com/p/codesearch/regexp"
+	"github.com/evanj/csearch/codesearch/index"
 	"github.com/evanj/csearch/grep"
 	"github.com/evanj/csearch/reindex"
 )

@@ -9,7 +9,7 @@ import (
 	"regexp/syntax"
 	"time"
 
-	"code.google.com/p/codesearch/index"
+	"github.com/evanj/csearch/codesearch/index"
 	"github.com/evanj/csearch/grep"
 )
 
