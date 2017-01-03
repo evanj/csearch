@@ -16,7 +16,6 @@ import (
 	"github.com/evanj/csearch/reindex"
 )
 
-const repositoryPath = "/Users/ej/gpath/src"
 const indexPath = "csearch_index"
 const staticPath = "static"
 
