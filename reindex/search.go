@@ -25,7 +25,7 @@ func Create(indexPath string) (*index.IndexWriter, error) {
 	return ix, nil
 }
 
-func IndexTree(ix *index.IndexWriter, tree string) error {
+func IndexTree(ix *index.IndexWriter, tree string, shouldIndex func(string, os.FileInfo) bool) error {
 	ix.AddPaths([]string{tree})
 
 	err := filepath.Walk(tree, func(path string, info os.FileInfo, err error) error {
@@ -42,7 +42,12 @@ func IndexTree(ix *index.IndexWriter, tree string) error {
 			log.Printf("%s: %s", path, err)
 			return nil
 		}
-		if info != nil && info.Mode()&os.ModeType == 0 {
+		if !shouldIndex(path, info) {
+			// strictly speaking: we should not return this for files, but it works
+			return filepath.SkipDir
+		}
+
+		if info.Mode()&os.ModeType == 0 {
 			ix.AddFile(path)
 		}
 		return nil
@@ -56,6 +61,8 @@ func FlushAndReopen(writer *index.IndexWriter, path string) *index.Index {
 	return index.Open(path)
 }
 
+// Returns matches that match qString and fileRegexp. Ignores files that exist in the
+// index but cannot be opened. This usually indicates that the index is out of date.
 func Search(ix *index.Index, qString string, fileRegexp string) ([]*grep.Match, error) {
 	start := time.Now()
 
@@ -82,6 +89,7 @@ func Search(ix *index.Index, qString string, fileRegexp string) ([]*grep.Match, 
 
 	realMatches := 0
 	fileMatches := 0
+	notFound := 0
 	var results []*grep.Match
 	for _, fileId := range postingList {
 		name := ix.Name(fileId)
@@ -92,7 +100,12 @@ func Search(ix *index.Index, qString string, fileRegexp string) ([]*grep.Match, 
 
 		matches, err := grep.Grep(re, name)
 		if err != nil {
-			return nil, err
+			if os.IsNotExist(err) {
+				// TODO: Warn when file not found? Requires changing match structure?
+				notFound += 1
+			} else {
+				return nil, err
+			}
 		}
 		if len(matches) > 0 {
 			realMatches += 1
@@ -100,8 +113,8 @@ func Search(ix *index.Index, qString string, fileRegexp string) ([]*grep.Match, 
 		results = append(results, matches...)
 	}
 	grepTime := time.Now()
-	log.Printf("posting matches: %d; file matches: %d; real matches: %d (false positives: %d)",
-		len(postingList), fileMatches, realMatches, fileMatches-realMatches)
+	log.Printf("posting matches: %d; file matches: %d; real matches: %d (false positives: %d; not found: %d)",
+		len(postingList), fileMatches, realMatches, fileMatches-realMatches-notFound, notFound)
 	log.Printf("posting time: %f grep time: %f",
 		postingTime.Sub(start).Seconds(), grepTime.Sub(postingTime).Seconds())
 	return results, nil

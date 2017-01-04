@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 	"time"
@@ -24,10 +25,11 @@ const maxFileMatches = 200
 type csearchServer struct {
 	ix          *index.Index
 	fileMatcher *grep.IndexedMatcher
+	stripPrefix string
 }
 
 const formPage = `<html>
-<head><title>page</title>
+<head><title>codesearch</title>
 <script>
 var attachTypeahead = function() {
 	var typeaheadInput = document.getElementById('typeahead_in');
@@ -82,7 +84,7 @@ window.addEventListener('load', attachTypeahead);
 </head>
 <body>
 <form action="/search" method="GET">
-Query: <input type="text" name="q"> file filter: <input type="text" name="f"> <input type="submit" value="Search">
+Query: <input type="text" name="q" autofocus> file filter: <input type="text" name="f"> <input type="submit" value="Search">
 </form>
 
 <form>
@@ -91,15 +93,49 @@ File name live: <input id="typeahead_in" type="text" name="q" width="50">
 </form>
 </body></html>`
 
+type formattedResult struct {
+	*grep.Match
+	TruncatedPath string
+}
+
+func (f *formattedResult) HTMLLine() template.HTML {
+	beforeMatch := template.HTMLEscapeString(f.Line[:f.Start])
+	matched := template.HTMLEscapeString(f.Line[f.Start:f.End])
+	afterMatch := template.HTMLEscapeString(f.Line[f.End:])
+
+	return template.HTML(beforeMatch + `<span class="m">` + matched + `</span>` + afterMatch)
+}
+
 const resultsTemplateString = `<html>
-<head><title>results</title></head>
+<head><title>results</title>
+
+<style type="text/css">
+.results {
+  font-family: Consolas, Courier, monospace;
+}
+
+.m {
+  font-weight: bold;
+}
+</style>
+</head>
 <body>
-{{range .}}{{.}}<br>{{end}}
+
+<table>
+{{range .}}
+<tr><td><a href="/open?path={{.Path}}&linenum={{.LineNumber}}">{{.TruncatedPath}}:{{.LineNumber}}</a></td><td class="results"><code>{{.HTMLLine}}</code></td></tr>
+{{end}}
+</table>
 </body></html>`
 
 var resultsTemplate = template.Must(template.New("results").Parse(resultsTemplateString))
 
 func (server *csearchServer) handler(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/" {
+		http.NotFound(w, r)
+		return
+	}
+
 	w.Write([]byte(formPage))
 }
 
@@ -136,10 +172,44 @@ func (server *csearchServer) searchHandler(w http.ResponseWriter, r *http.Reques
 	if err != nil {
 		panic(err)
 	}
-	err = resultsTemplate.Execute(w, results)
+
+	formattedResults := make([]*formattedResult, len(results))
+	for i, r := range results {
+		formattedPath := r.Path
+		if strings.HasPrefix(formattedPath, server.stripPrefix) {
+			formattedPath = formattedPath[len(server.stripPrefix):]
+		}
+		formattedResults[i] = &formattedResult{r, formattedPath}
+	}
+	err = resultsTemplate.Execute(w, formattedResults)
 	if err != nil {
 		panic(err)
 	}
+}
+
+func (server *csearchServer) openHandler(w http.ResponseWriter, r *http.Request) {
+	err := r.ParseForm()
+	if err != nil {
+		panic(err)
+	}
+	path := r.FormValue("path")
+	if _, err = os.Stat(path); err != nil {
+		panic(path + " does not exist? " + err.Error())
+	}
+	lineNumberString := r.FormValue("linenum")
+	_, err = strconv.Atoi(lineNumberString)
+	if err != nil {
+		panic(err)
+	}
+
+	argument := path + ":" + lineNumberString
+	fmt.Println("running subl " + argument)
+	c := exec.Command("subl", argument)
+	err = c.Run()
+	if err != nil {
+		panic(err)
+	}
+	w.Write([]byte("OK!"))
 }
 
 func favicon(w http.ResponseWriter, r *http.Request) {
@@ -159,6 +229,9 @@ func logRequests(handler http.Handler) http.Handler {
 func main() {
 	skipIndexing := flag.Bool("skipIndexing", false, "do not index the source trees (uses existing index)")
 	port := flag.Int("port", 8080, "HTTP listening port")
+	stripPrefix := flag.String("stripPrefix", "", "Prefix to remove when displaying results")
+	skipPathsFlag := flag.String("skipPaths", "", "Subpaths to not index separated by :")
+
 	flag.Parse()
 	if flag.NArg() == 0 {
 		fmt.Fprintln(os.Stderr, "Usage: csearch (source tree) [source tree*]")
@@ -166,6 +239,18 @@ func main() {
 		os.Exit(1)
 	}
 	sourcePaths := flag.Args()
+
+	skipPathSet := map[string]struct{}{}
+	for _, v := range strings.Split(*skipPathsFlag, ":") {
+		skipPathSet[v] = struct{}{}
+	}
+	shouldIndex := func(path string, info os.FileInfo) bool {
+		if _, contained := skipPathSet[path]; contained {
+			fmt.Println("!!! WTF SKIPPING", path)
+			return false
+		}
+		return true
+	}
 
 	var ix *index.Index
 	if !*skipIndexing {
@@ -176,7 +261,7 @@ func main() {
 			panic(err)
 		}
 		for _, path := range sourcePaths {
-			err = reindex.IndexTree(writer, path)
+			err = reindex.IndexTree(writer, path, shouldIndex)
 			if err != nil {
 				panic(err)
 			}
@@ -194,7 +279,7 @@ func main() {
 		path := ix.Name(uint32(i))
 		indexedMatcher.Add(path)
 	}
-	server := csearchServer{ix, &indexedMatcher}
+	server := csearchServer{ix, &indexedMatcher, *stripPrefix}
 
 	http.HandleFunc("/favicon.ico", favicon)
 	const staticPrefix = "/static/"
@@ -204,6 +289,7 @@ func main() {
 	http.Handle("/", http.HandlerFunc(server.handler))
 	http.Handle("/search", http.HandlerFunc(server.searchHandler))
 	http.Handle("/type", http.HandlerFunc(server.typeaheadHandler))
+	http.Handle("/open", http.HandlerFunc(server.openHandler))
 
 	portString := "localhost:" + strconv.Itoa(*port)
 	fmt.Printf("Listening on http://%s/\n", portString)
