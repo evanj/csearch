@@ -9,8 +9,8 @@ import (
 	"regexp/syntax"
 	"time"
 
-	"github.com/evanj/csearch/codesearch/index"
 	"github.com/evanj/csearch/grep"
+	"github.com/google/codesearch/index"
 )
 
 const minQueryLength = 3

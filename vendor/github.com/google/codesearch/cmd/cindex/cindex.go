@@ -13,7 +13,7 @@ import (
 	"runtime/pprof"
 	"sort"
 
-	"github.com/evanj/csearch/codesearch/index"
+	"github.com/google/codesearch/index"
 )
 
 var usageMessage = `usage: cindex [-list] [-reset] [path...]

@@ -12,9 +12,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/evanj/csearch/codesearch/index"
 	"github.com/evanj/csearch/grep"
 	"github.com/evanj/csearch/reindex"
+	"github.com/google/codesearch/index"
 )
 
 const indexPath = "csearch_index"

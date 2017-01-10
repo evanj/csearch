@@ -15,4 +15,4 @@ In the "file name live" box, start typing. It will display a "live" list of resu
 
 # codesearch fork
 
-I've forked codesearch into this repository only to be able to read the file names from the index file. This is a bit of overkill but it works.
+I've forked codesearch into `github.com/evanj/codesearch` to be able to read the file names from the index file. This is a bit of overkill but it works. To get it, I've used `govendor fetch github.com/google/codesearch/^::github.com/evanj/codesearch` to set up the vendor path correctly. This means the fork maintains the original import paths for easy merging.
